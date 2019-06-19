@@ -25,12 +25,7 @@ import random
 import uuid
 import warnings
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor
-
-# NOTE:
-# https://pypi.org/project/futures/ mentions:
-# The ProcessPoolExecutor class has known (unfixable) problems on Python 2 and
-# should not be relied on for mission critical work.
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from tqdm import tqdm
 from PIL import Image
@@ -800,21 +795,12 @@ class Pipeline(object):
 
         print("Images: %s" % len(self.augmentor_images))
 
-        # TODO: find a better way that doesn't need to iterate over every image
-        # TODO: get rid of this label_pair property as nowhere else uses it
-        # Check if we have any labels before printing label information.
-        label_count = 0
-        for image in self.augmentor_images:
-            if image.label_pair is not None:
-                label_count += 1
+        label_pairs = sorted(set([x.label_pair for x in self.augmentor_images]))
 
-        if len(label_count) != 0:
-            label_pairs = sorted(set([x.label_pair for x in self.augmentor_images]))
+        print("Classes: %s" % len(label_pairs))
 
-            print("Classes: %s" % len(label_pairs))
-
-            for label_pair in label_pairs:
-                print ("\tClass index: %s Class label: %s " % (label_pair[0], label_pair[1]))
+        for label_pair in label_pairs:
+            print ("\tClass index: %s Class label: %s " % (label_pair[0], label_pair[1]))
 
         if len(self.augmentor_images) != 0:
             print("Dimensions: %s" % len(self.distinct_dimensions))
@@ -1772,13 +1758,24 @@ class DataFramePipeline(Pipeline):
         super(DataFramePipeline, self).__init__(source_directory=None,
                                                 output_directory=output_directory,
                                                 save_format=save_format)
+        self._populate(source_dataframe,
+                  image_col,
+                  category_col,
+                  output_directory,
+                  save_format)
 
-        self._populate(source_dataframe, image_col, category_col, output_directory, save_format)
-
-    def _populate(self, source_dataframe, image_col, category_col, output_directory, save_format):
+    def _populate(self,
+                  source_dataframe,
+                  image_col,
+                  category_col,
+                  output_directory,
+                  save_format):
         # Assume we have an absolute path for the output
         # Scan the directory that user supplied.
-        self.augmentor_images, self.class_labels = scan_dataframe(source_dataframe, image_col, category_col, output_directory)
+        self.augmentor_images, self.class_labels = scan_dataframe(source_dataframe,
+                                                                   image_col,
+                                                                   category_col,
+                                                                  output_directory)
 
         self._check_images(output_directory)
 
@@ -1860,7 +1857,7 @@ class DataPipeline(Pipeline):
         """
         return self._execute(augmentor_image)
 
-    def generator(self, batch_size=1):
+    def generator(self, batch_size=1, image_data_format="channels_last"):
 
         # If the number is 0 or negative, default it to 1
         batch_size = 1 if (batch_size < 1) else batch_size
@@ -1882,16 +1879,27 @@ class DataPipeline(Pipeline):
 
                 images_to_yield = [np.asarray(x) for x in images_to_yield]
 
-                if self.labels:
-                    batch.append(images_to_yield)
-                    y.append(self.labels[index])
-                else:
-                    batch.append(images_to_yield)
+                #images_to_yield is a single entry list of [image, mask]
+                image = images_to_yield[0]
+                mask = images_to_yield[1]
+#                print(image.shape)
 
-            if self.labels:
-                yield batch, y
-            else:
-                yield batch
+                batch.append(image)
+                y.append(mask)
+                    
+            batch = np.asarray(batch)
+            y = np.asarray(y)
+#            print("Before:", batch.shape)
+            
+            if image_data_format == "channels_last":
+                batch = batch[:, :, :, np.newaxis]
+                y = y[:, :, :, np.newaxis]
+            elif image_data_format == "channels_first":
+                batch = batch[np.newaxis, :, :, :]
+                y = y[np.newaxis, :, :, :]
+#            print("After:", batch.shape)
+
+            yield batch, y
 
     def sample(self, n):
 
@@ -1911,6 +1919,7 @@ class DataPipeline(Pipeline):
                 if r <= operation.probability:
                     images_to_return = operation.perform_operation(images_to_return)
 
+            # Convert to array data
             images_to_return = [np.asarray(x) for x in images_to_return]
 
             if self.labels:
