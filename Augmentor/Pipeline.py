@@ -1880,8 +1880,15 @@ class DataPipeline(Pipeline):
                 images_to_yield = [np.asarray(x) for x in images_to_yield]
 
                 #images_to_yield is a single entry list of [image, mask]
-                image = images_to_yield[0]
-                mask = images_to_yield[1]
+                image = images_to_yield[0:1] #using this type of indexing creates extra dims
+                mask = images_to_yield[1:]
+                #change channels first to channels last format
+                if image_data_format=="channels_last":
+                    image = np.moveaxis(image, 0, 2)
+                    mask = np.moveaxis(mask, 0, 2)
+#                if len(images_to_yield) > 2: #copy image array no of mask times
+#                    #mask multi-channel already
+#                    image = np.repeat(image[:, :, np.newaxis], len(images_to_yield)-1, axis=2)
 #                print(image.shape)
 
                 batch.append(image)
@@ -1889,15 +1896,7 @@ class DataPipeline(Pipeline):
                     
             batch = np.asarray(batch)
             y = np.asarray(y)
-#            print("Before:", batch.shape)
-            
-            if image_data_format == "channels_last":
-                batch = batch[:, :, :, np.newaxis]
-                y = y[:, :, :, np.newaxis]
-            elif image_data_format == "channels_first":
-                batch = batch[np.newaxis, :, :, :]
-                y = y[np.newaxis, :, :, :]
-#            print("After:", batch.shape)
+#            print("After:", batch.shape, y.shape)
 
             yield batch, y
 
